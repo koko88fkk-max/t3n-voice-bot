@@ -9,13 +9,11 @@ const {
 } = require('@discordjs/voice');
 const path = require('path');
 const fs = require('fs');
-const https = require('https');
 const express = require('express');
 
 // ===== EXPRESS SERVER =====
 const app = express();
 const port = process.env.PORT || 3000;
-
 let botReady = false;
 let botError = '';
 
@@ -29,7 +27,7 @@ app.get('/', (req, res) => {
         .status { padding: 10px; border-radius: 8px; margin: 10px 0; font-size: 18px; }
         .online { background: #0f3d0f; color: #4caf50; }
         .offline { background: #3d0f0f; color: #f44336; }
-        .error { background: #3d3d0f; color: #ff9800; font-size: 14px; padding: 8px; margin-top: 10px; border-radius: 6px; }
+        .error { background: #3d3d0f; color: #ff9800; font-size: 14px; padding: 8px; margin-top: 10px; border-radius: 6px; word-break: break-all; }
     </style></head>
     <body><div class="box">
         <h1>🎵 T3N Voice Bot</h1>
@@ -43,29 +41,7 @@ app.get('/', (req, res) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: botReady ? 'connected' : 'disconnected', error: botError, uptime: process.uptime() }));
-
 app.listen(port, '0.0.0.0', () => console.log(`🌐 Server on port ${port}`));
-
-// ===== TEST TOKEN VIA REST API =====
-function testToken(token) {
-    return new Promise((resolve, reject) => {
-        const req = https.get('https://discord.com/api/v10/users/@me', {
-            headers: { 'Authorization': `Bot ${token}` }
-        }, (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => {
-                if (res.statusCode === 200) {
-                    resolve(JSON.parse(data));
-                } else {
-                    reject(new Error(`Token invalid! HTTP ${res.statusCode}: ${data}`));
-                }
-            });
-        });
-        req.on('error', reject);
-        req.setTimeout(10000, () => { req.destroy(); reject(new Error('Request timeout')); });
-    });
-}
 
 // ===== CONFIGURATION =====
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
@@ -75,32 +51,17 @@ const WELCOME_SOUND = path.join(__dirname, 'welcome.wav');
 console.log("======= T3N VOICE BOT =======");
 console.log("Token set:", !!DISCORD_BOT_TOKEN);
 console.log("Sound exists:", fs.existsSync(WELCOME_SOUND));
-console.log("Node:", process.version);
 
 if (!DISCORD_BOT_TOKEN) {
-    botError = 'DISCORD_BOT_TOKEN not set in Render Environment!';
+    botError = 'DISCORD_BOT_TOKEN not set!';
     console.error("❌", botError);
 } else {
-    // First test token via REST, then login
-    startBot();
+    // Wait 15 seconds before connecting to avoid Discord rate limits
+    console.log("⏳ Waiting 15 seconds before connecting (avoid rate limit)...");
+    setTimeout(startBot, 15000);
 }
 
 async function startBot() {
-    // Step 1: Test token via REST API
-    console.log("🔍 Testing token via Discord REST API...");
-    try {
-        const botUser = await testToken(DISCORD_BOT_TOKEN);
-        console.log(`✅ Token VALID! Bot: ${botUser.username}#${botUser.discriminator} (ID: ${botUser.id})`);
-    } catch (err) {
-        botError = `Token INVALID: ${err.message}`;
-        console.error("❌ TOKEN TEST FAILED:", err.message);
-        console.error("⚠️  Go to Discord Developer Portal -> Bot -> Reset Token -> Update in Render");
-        return; // Don't try to login with bad token
-    }
-
-    // Step 2: Login via Gateway
-    console.log("🔑 Token valid! Connecting to Discord Gateway...");
-
     const client = new Client({
         intents: [
             GatewayIntentBits.Guilds,
@@ -111,18 +72,13 @@ async function startBot() {
     let voiceConnection = null;
     let isPlaying = false;
 
-    // ===== JOIN VOICE CHANNEL =====
     async function joinChannel() {
         try {
             const channel = client.channels.cache.get(VOICE_CHANNEL_ID);
             if (!channel) {
                 console.error("❌ Voice channel not found:", VOICE_CHANNEL_ID);
-                const vc = client.channels.cache.filter(c => c.type === 2);
-                console.log("Available voice channels:", vc.map(c => `${c.name}(${c.id})`).join(', '));
                 return;
             }
-
-            console.log("🎙️ Joining:", channel.name);
 
             voiceConnection = joinVoiceChannel({
                 channelId: channel.id,
@@ -150,7 +106,6 @@ async function startBot() {
         }
     }
 
-    // ===== PLAY SOUND =====
     function playWelcomeSound() {
         if (!voiceConnection || isPlaying) return;
         try {
@@ -159,7 +114,7 @@ async function startBot() {
             isPlaying = true;
             player.play(resource);
             voiceConnection.subscribe(player);
-            player.on(AudioPlayerStatus.Idle, () => { isPlaying = false; });
+            player.on(AudioPlayerStatus.Idle, () => { isPlaying = false; console.log("🔇 Sound done."); });
             player.on('error', (e) => { console.error("Audio err:", e.message); isPlaying = false; });
             console.log("🔊 Playing sound!");
         } catch (e) {
@@ -168,7 +123,6 @@ async function startBot() {
         }
     }
 
-    // ===== EVENTS =====
     client.on('ready', async () => {
         botReady = true;
         botError = '';
@@ -191,14 +145,25 @@ async function startBot() {
 
     client.on('error', (e) => { console.error('Client err:', e.message); botError = e.message; });
 
-    // ===== LOGIN =====
-    try {
-        await client.login(DISCORD_BOT_TOKEN);
-        console.log("🔑 Gateway login success!");
-    } catch (err) {
-        botError = `Gateway login failed: ${err.message}`;
-        console.error("❌ GATEWAY FAILED:", err.message);
+    // LOGIN with retry
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            console.log(`🔑 Login attempt ${attempt}/3...`);
+            await client.login(DISCORD_BOT_TOKEN);
+            console.log("✅ LOGIN SUCCESS!");
+            return; // Success!
+        } catch (err) {
+            console.error(`❌ Attempt ${attempt} failed:`, err.message);
+            botError = `Login failed: ${err.message}`;
+            if (attempt < 3) {
+                const waitTime = attempt * 15000; // 15s, 30s
+                console.log(`⏳ Waiting ${waitTime / 1000}s before retry...`);
+                await new Promise(r => setTimeout(r, waitTime));
+            }
+        }
     }
+    console.error("❌ ALL LOGIN ATTEMPTS FAILED. Token is likely revoked.");
+    botError = "All login attempts failed. Reset token in Discord Developer Portal.";
 }
 
 process.on('unhandledRejection', (e) => console.error('Unhandled:', e));
