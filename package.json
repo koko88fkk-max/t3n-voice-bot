@@ -1,0 +1,17 @@
+{
+  "name": "t3n-voice-bot",
+  "version": "1.0.0",
+  "description": "T3N Discord Voice Bot - Plays welcome sound",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "@discordjs/voice": "^0.17.0",
+    "@discordjs/opus": "^0.9.0",
+    "ffmpeg-static": "^5.2.0",
+    "libsodium-wrappers": "^0.7.13",
+    "express": "^4.18.2"
+  }
+}
