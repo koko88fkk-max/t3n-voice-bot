@@ -11,40 +11,69 @@ const path = require('path');
 const fs = require('fs');
 const express = require('express');
 
+// ===== EXPRESS SERVER =====
+const app = express();
+const port = process.env.PORT || 3000;
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+app.get('/', (req, res) => {
+    res.send(`
+    <html><head><title>T3N Voice Bot</title>
+    <style>
+        body { background: #1a1a2e; color: #eee; font-family: Arial; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        .box { background: #16213e; padding: 30px; border-radius: 12px; text-align: center; max-width: 500px; width: 90%; }
+        h1 { color: #e94560; }
+        .status { padding: 10px; border-radius: 8px; margin: 10px 0; font-size: 18px; }
+        .online { background: #0f3d0f; color: #4caf50; }
+        .offline { background: #3d0f0f; color: #f44336; }
+        input { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #333; border-radius: 8px; background: #0f3460; color: #fff; font-size: 16px; box-sizing: border-box; }
+        button { background: #e94560; color: #fff; border: none; padding: 12px 30px; border-radius: 8px; cursor: pointer; font-size: 16px; }
+        button:hover { background: #c73e54; }
+    </style></head>
+    <body><div class="box">
+        <h1>🎵 T3N Voice Bot</h1>
+        <div class="status ${botReady ? 'online' : 'offline'}">
+            ${botReady ? '🟢 Bot Connected to Discord!' : '🔴 Bot Not Connected'}
+        </div>
+        <p>Uptime: ${Math.floor(process.uptime())}s</p>
+    </div></body></html>
+    `);
+});
+
+app.get('/health', (req, res) => res.json({
+    status: 'ok',
+    botReady: botReady,
+    uptime: process.uptime()
+}));
+
+app.listen(port, '0.0.0.0', () => console.log(`🌐 Server on port ${port}`));
+
 // ===== CONFIGURATION =====
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
-console.log("🔍 DEBUG: Token exists:", !!DISCORD_BOT_TOKEN);
-console.log("🔍 DEBUG: Token length:", DISCORD_BOT_TOKEN ? DISCORD_BOT_TOKEN.length : 0);
-console.log("🔍 DEBUG: Token starts with:", DISCORD_BOT_TOKEN ? DISCORD_BOT_TOKEN.substring(0, 10) + "..." : "N/A");
-
-if (!DISCORD_BOT_TOKEN) {
-    console.error("❌ DISCORD_BOT_TOKEN not set!");
-    process.exit(1);
-}
-
 const VOICE_CHANNEL_ID = '1396967239948701859';
 const WELCOME_SOUND = path.join(__dirname, 'welcome.wav');
 
-// Check if audio file exists
-console.log("🔍 DEBUG: Welcome sound exists:", fs.existsSync(WELCOME_SOUND));
+console.log("======= T3N VOICE BOT STARTING =======");
+console.log("Token set:", !!DISCORD_BOT_TOKEN);
+console.log("Token length:", DISCORD_BOT_TOKEN ? DISCORD_BOT_TOKEN.length : 0);
+console.log("Sound file exists:", fs.existsSync(WELCOME_SOUND));
+console.log("Node version:", process.version);
 
-// ===== EXPRESS SERVER (Render health check) =====
-const app = express();
-const port = process.env.PORT || 3000;
-app.get('/', (req, res) => res.send('T3N Voice Bot is running! 🎵'));
-app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
-app.listen(port, '0.0.0.0', () => console.log(`🌐 Server on port ${port}`));
+if (!DISCORD_BOT_TOKEN) {
+    console.error("❌ DISCORD_BOT_TOKEN not set in environment!");
+    // Don't exit - keep the server running so user can see status page
+}
 
 // ===== DISCORD CLIENT =====
-console.log("🔍 DEBUG: Creating Discord client...");
+let botReady = false;
+
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildVoiceStates,
-        GatewayIntentBits.GuildMembers,
     ],
 });
-console.log("🔍 DEBUG: Discord client created.");
 
 let voiceConnection = null;
 let isPlaying = false;
@@ -52,15 +81,16 @@ let isPlaying = false;
 // ===== JOIN VOICE CHANNEL =====
 async function joinChannel() {
     try {
-        console.log("🔍 DEBUG: Attempting to join voice channel:", VOICE_CHANNEL_ID);
         const channel = client.channels.cache.get(VOICE_CHANNEL_ID);
         if (!channel) {
-            console.error("❌ Voice channel not found! ID:", VOICE_CHANNEL_ID);
-            console.log("🔍 DEBUG: Available channels:", client.channels.cache.map(c => `${c.name}(${c.id})`).join(', '));
+            console.error("❌ Voice channel not found:", VOICE_CHANNEL_ID);
+            // List available voice channels for debugging
+            const voiceChannels = client.channels.cache.filter(c => c.type === 2);
+            console.log("Available voice channels:", voiceChannels.map(c => `${c.name}(${c.id})`).join(', '));
             return null;
         }
 
-        console.log("🔍 DEBUG: Found channel:", channel.name, "| Type:", channel.type);
+        console.log("Joining voice channel:", channel.name);
 
         voiceConnection = joinVoiceChannel({
             channelId: channel.id,
@@ -72,10 +102,10 @@ async function joinChannel() {
 
         voiceConnection.on(VoiceConnectionStatus.Disconnected, async () => {
             try {
-                console.log("⚠️ Disconnected from voice. Reconnecting...");
+                console.log("⚠️ Disconnected. Reconnecting...");
                 await entersState(voiceConnection, VoiceConnectionStatus.Connecting, 5000);
             } catch {
-                console.log("🔄 Reconnecting to voice channel...");
+                console.log("🔄 Full reconnect...");
                 voiceConnection.destroy();
                 voiceConnection = null;
                 setTimeout(joinChannel, 3000);
@@ -83,14 +113,12 @@ async function joinChannel() {
         });
 
         voiceConnection.on(VoiceConnectionStatus.Ready, () => {
-            console.log(`🎙️ Connected to voice channel: ${channel.name}`);
+            console.log("🎙️ Connected to voice channel:", channel.name);
         });
 
-        console.log("✅ Voice connection created.");
         return voiceConnection;
     } catch (err) {
-        console.error("❌ Error joining voice channel:", err.message);
-        console.error(err.stack);
+        console.error("❌ Join error:", err.message);
         return null;
     }
 }
@@ -109,25 +137,26 @@ function playWelcomeSound() {
 
         player.on(AudioPlayerStatus.Idle, () => {
             isPlaying = false;
-            console.log("🔇 Welcome sound finished.");
+            console.log("🔇 Sound finished.");
         });
 
         player.on('error', (err) => {
-            console.error("❌ Audio player error:", err.message);
+            console.error("❌ Audio error:", err.message);
             isPlaying = false;
         });
 
         console.log("🔊 Playing welcome sound!");
     } catch (err) {
-        console.error("❌ Error playing sound:", err.message);
+        console.error("❌ Play error:", err.message);
         isPlaying = false;
     }
 }
 
-// ===== BOT READY =====
+// ===== BOT EVENTS =====
 client.on('ready', async () => {
-    console.log(`✅ Voice Bot Ready! Logged in as ${client.user.tag}`);
-    console.log(`📡 Serving ${client.guilds.cache.size} servers`);
+    botReady = true;
+    console.log(`✅ BOT READY! Logged in as ${client.user.tag}`);
+    console.log(`📡 Servers: ${client.guilds.cache.size}`);
 
     client.user.setPresence({
         activities: [{ name: '🎵 T3N Voice', type: 2 }],
@@ -137,49 +166,44 @@ client.on('ready', async () => {
     await joinChannel();
 });
 
-// ===== VOICE STATE UPDATE =====
 client.on('voiceStateUpdate', (oldState, newState) => {
     if (newState.channelId === VOICE_CHANNEL_ID && oldState.channelId !== VOICE_CHANNEL_ID) {
         if (newState.member.user.bot) return;
-        console.log(`👤 ${newState.member.user.tag} joined the voice channel!`);
+        console.log(`👤 ${newState.member.user.tag} joined voice!`);
 
         if (!voiceConnection) {
-            joinChannel().then(() => {
-                setTimeout(playWelcomeSound, 500);
-            });
+            joinChannel().then(() => setTimeout(playWelcomeSound, 500));
         } else {
             playWelcomeSound();
         }
     }
 });
 
-// ===== ERROR HANDLING =====
-client.on('error', (error) => {
-    console.error('❌ Discord Error:', error.message);
-});
+client.on('error', (err) => console.error('❌ Client error:', err.message));
+client.on('warn', (msg) => console.warn('⚠️ Warning:', msg));
 
-process.on('unhandledRejection', (error) => {
-    console.error('❌ Unhandled Rejection:', error);
-});
+process.on('unhandledRejection', (err) => console.error('❌ Unhandled:', err));
+process.on('uncaughtException', (err) => console.error('❌ Exception:', err));
 
-process.on('uncaughtException', (error) => {
-    console.error('❌ Uncaught Exception:', error);
-});
+// ===== LOGIN =====
+if (DISCORD_BOT_TOKEN) {
+    console.log("🔑 Logging in to Discord...");
 
-// ===== LOGIN WITH TIMEOUT =====
-console.log("🔑 Attempting Discord login...");
+    const loginTimeout = setTimeout(() => {
+        console.error("❌ LOGIN TIMEOUT after 30s! Token is likely invalid/revoked.");
+        console.error("Go to Discord Developer Portal -> Reset Token -> Update in Render.");
+    }, 30000);
 
-// Set a timeout - if login takes more than 30 seconds, something is wrong
-const loginTimeout = setTimeout(() => {
-    console.error("❌ LOGIN TIMEOUT: Login took longer than 30 seconds!");
-    console.error("This usually means the token is invalid or Discord is blocking the connection.");
-}, 30000);
-
-client.login(DISCORD_BOT_TOKEN).then(() => {
-    clearTimeout(loginTimeout);
-    console.log("🔑 Login successful!");
-}).catch((err) => {
-    clearTimeout(loginTimeout);
-    console.error("❌ LOGIN FAILED:", err.message);
-    console.error("Full error:", err);
-});
+    client.login(DISCORD_BOT_TOKEN)
+        .then(() => {
+            clearTimeout(loginTimeout);
+            console.log("🔑 LOGIN SUCCESS!");
+        })
+        .catch((err) => {
+            clearTimeout(loginTimeout);
+            console.error("❌ LOGIN FAILED:", err.message);
+            console.error("Go to Discord Developer Portal -> Reset Token -> Update in Render.");
+        });
+} else {
+    console.error("❌ No token! Set DISCORD_BOT_TOKEN in Render Environment.");
+}
